@@ -50,3 +50,6 @@ env/
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# App Local Cache
+.cache/

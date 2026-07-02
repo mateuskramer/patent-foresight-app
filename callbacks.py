@@ -121,6 +121,43 @@ def _ai_cache_set(key: str, value: str):
     _AI_CACHE[key] = (value, time.time())
 
 
+_LAST_REFRESH_ATTEMPT = 0
+REFRESH_COOLDOWN = 30  # segundos
+
+def api_waiting_layout(pathname):
+    return html.Div([
+        dbc.Card(
+            dbc.CardBody([
+                html.Div([
+                    html.I(className="fas fa-server fa-spin me-3", style={"fontSize": "40px", "color": BLUE}),
+                    html.H2("Conectando ao Servidor de Dados", style={"margin": 0, "color": TEXT, "fontWeight": "600"})
+                ], style={"display": "flex", "alignItems": "center", "marginBottom": "20px"}),
+                html.P(
+                    "A API de patentes está sendo inicializada no Render. Como estamos utilizando o plano gratuito, "
+                    "o servidor de dados entra em modo de suspensão após inatividade e pode levar de 1 a 2 minutos para acordar.",
+                    style={"color": MUTED, "fontSize": "16px", "lineHeight": "1.6"}
+                ),
+                html.P(
+                    "Assim que o servidor de dados terminar de inicializar, a plataforma carregará normalmente.",
+                    style={"color": "#4b5563", "fontSize": "14px", "marginBottom": "24px"}
+                ),
+                dbc.Button([
+                    html.I(className="fas fa-sync-alt me-2"), "Verificar Conexão e Recarregar"
+                ], href=pathname, external_link=True, color="primary", size="lg",
+                   style={"borderRadius": "12px", "fontWeight": "600", "padding": "12px 24px", "background": BLUE, "border": "none"})
+            ]),
+            style={
+                "background": CARD,
+                "border": f"1px solid {BORDER}",
+                "borderRadius": "24px",
+                "padding": "30px",
+                "maxWidth": "650px",
+                "margin": "80px auto 0",
+                "boxShadow": "0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3)"
+            }
+        )
+    ], style={"padding": "20px"})
+
 def register_callbacks(app, page_routes):
 
     # =========================================================================
@@ -129,15 +166,23 @@ def register_callbacks(app, page_routes):
     @app.callback(Output("page-content", "children"),
                   Input("url", "pathname"), Input("url", "search"))
     def render_page(pathname, search):
+        global _LAST_REFRESH_ATTEMPT
         try:
             import data
-            # Se os dados estão vazios (por exemplo, devido ao cold start da API no Render), tenta recarregar
+            # Se os dados estão vazios (por exemplo, devido ao cold start da API no Render), tenta recarregar com cooldown
             if data.df_patents.empty or data.terms_df.empty:
-                logger.warning("Dados vazios na renderização da página %s. Tentando recarregar da API...", pathname)
-                try:
-                    data.refresh_data()
-                except Exception as ex:
-                    logger.error("Falha ao recarregar dados na renderização da página: %s", ex)
+                now = time.time()
+                if now - _LAST_REFRESH_ATTEMPT > REFRESH_COOLDOWN:
+                    _LAST_REFRESH_ATTEMPT = now
+                    logger.warning("Dados vazios na renderização da página %s. Tentando recarregar da API...", pathname)
+                    try:
+                        data.refresh_data()
+                    except Exception as ex:
+                        logger.error("Falha ao recarregar dados na renderização da página: %s", ex)
+
+            # Se mesmo após a tentativa de refresh os dados ainda estiverem vazios, exibe a tela de carregamento amigável
+            if data.df_patents.empty or data.terms_df.empty:
+                return api_waiting_layout(pathname)
 
             layout_fn = page_routes.get(pathname, page_routes["/"])
             # passa search só para o builder (que sabe ler ?sid=)

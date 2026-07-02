@@ -13,6 +13,7 @@ from scipy.stats import pearsonr
 import json
 import warnings
 import requests
+import time
 
 warnings.filterwarnings("ignore", message="pandas only supports SQLAlchemy")
 load_dotenv()
@@ -60,8 +61,75 @@ def run_write(query, params=None):
 API_BASE_URL = os.getenv("API_BASE_URL", "https://apipatent.onrender.com").rstrip("/")
 API_KEY = os.getenv("API_KEY", "")
 
-def requests_get_with_retry(url, timeout=90, max_retries=4, delay=10):
-    import time
+# --- Configuração do Cache Local ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CACHE_DIR = os.path.join(BASE_DIR, ".cache")
+CACHE_PATENTS_PATH = os.path.join(CACHE_DIR, "patents.json")
+CACHE_TERMS_PATH = os.path.join(CACHE_DIR, "terms.json")
+CACHE_TTL = 600  # 10 minutos
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+COOLDOWN_PATH = os.path.join(CACHE_DIR, "cooldown.txt")
+COOLDOWN_TIME = 60  # 1 minuto de cooldown em caso de falha da API
+
+def _is_api_in_cooldown():
+    try:
+        if os.path.exists(COOLDOWN_PATH):
+            if time.time() - os.path.getmtime(COOLDOWN_PATH) < COOLDOWN_TIME:
+                return True
+            else:
+                try:
+                    os.remove(COOLDOWN_PATH)
+                except OSError:
+                    pass
+    except Exception:
+        pass
+    return False
+
+def _set_api_cooldown():
+    try:
+        with open(COOLDOWN_PATH, "w", encoding="utf-8") as f:
+            f.write(str(time.time()))
+    except Exception:
+        pass
+
+def _clear_api_cooldown():
+    try:
+        if os.path.exists(COOLDOWN_PATH):
+            os.remove(COOLDOWN_PATH)
+    except OSError:
+        pass
+
+def _read_cache(path):
+    """Retorna dados do cache se existir e for recente, ou None."""
+    try:
+        if os.path.exists(path) and (time.time() - os.path.getmtime(path) < CACHE_TTL):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
+
+def _read_cache_fallback(path):
+    """Retorna dados do cache mesmo que expirado (fallback de falha)."""
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
+
+def _write_cache(path, data):
+    try:
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp_path, path)  # Substituição atômica e segura contra concorrência
+    except Exception as e:
+        logger.warning("Erro ao salvar cache em %s: %s", path, e)
+
+def requests_get_with_retry(url, timeout=12, max_retries=2, delay=2):
     for attempt in range(max_retries):
         try:
             logger.info("Requisitando API (tentativa %d/%d): %s", attempt + 1, max_retries, url)
@@ -76,24 +144,38 @@ def requests_get_with_retry(url, timeout=90, max_retries=4, delay=10):
                 raise e
 
 def load_patents():
-    try:
-        r = requests_get_with_retry(f"{API_BASE_URL}/patents")
-        data = r.json()
-        df = pd.DataFrame(data)
-        if not df.empty and "embedding" in df.columns:
-            df["embedding"] = df["embedding"].apply(
-                lambda x: np.array(x, dtype=np.float32)
-                if isinstance(x, list) else (
-                    np.array(json.loads(x), dtype=np.float32)
-                    if isinstance(x, str) and x != "" else None
-                )
-            )
-            df = df.dropna(subset=["embedding"])
-        return df.reset_index(drop=True)
-    except Exception:
-        logger.error("Erro ao carregar patentes da API", exc_info=True)
-        return pd.DataFrame()
+    cached = _read_cache(CACHE_PATENTS_PATH)
+    if cached is not None:
+        logger.info("Carregando patentes do cache local.")
+        df = pd.DataFrame(cached)
+    else:
+        if _is_api_in_cooldown():
+            logger.warning("API em cooldown devido a falha recente. Ignorando chamada de patentes.")
+            fallback = _read_cache_fallback(CACHE_PATENTS_PATH)
+            df = pd.DataFrame(fallback) if fallback else pd.DataFrame()
+        else:
+            try:
+                r = requests_get_with_retry(f"{API_BASE_URL}/patents")
+                data = r.json()
+                _write_cache(CACHE_PATENTS_PATH, data)
+                _clear_api_cooldown()
+                df = pd.DataFrame(data)
+            except Exception as e:
+                logger.warning("Falha na API de patentes, ativando cooldown e usando fallback: %s", e)
+                _set_api_cooldown()
+                fallback = _read_cache_fallback(CACHE_PATENTS_PATH)
+                df = pd.DataFrame(fallback) if fallback else pd.DataFrame()
 
+    if not df.empty and "embedding" in df.columns:
+        df["embedding"] = df["embedding"].apply(
+            lambda x: np.array(x, dtype=np.float32)
+            if isinstance(x, list) else (
+                np.array(json.loads(x), dtype=np.float32)
+                if isinstance(x, str) and x != "" else None
+            )
+        )
+        df = df.dropna(subset=["embedding"])
+    return df.reset_index(drop=True)
 
 BG      = "#000000"
 CARD    = "#0a0a0a"
@@ -104,13 +186,26 @@ BORDER  = "#1f2937"
 PALETTE = ["#2563eb", "#e74c3c", "#22c55e", "#f39c12", "#9b59b6"]
 
 def load_terms():
+    cached = _read_cache(CACHE_TERMS_PATH)
+    if cached is not None:
+        logger.info("Carregando termos do cache local.")
+        return pd.DataFrame(cached)
+    if _is_api_in_cooldown():
+        logger.warning("API em cooldown devido a falha recente. Ignorando chamada de termos.")
+        fallback = _read_cache_fallback(CACHE_TERMS_PATH)
+        return pd.DataFrame(fallback) if fallback else pd.DataFrame()
     try:
         r = requests_get_with_retry(f"{API_BASE_URL}/terms/associations")
         data = r.json()
+        _write_cache(CACHE_TERMS_PATH, data)
+        _clear_api_cooldown()
         return pd.DataFrame(data)
-    except Exception:
-        logger.error("Erro ao carregar termos da API", exc_info=True)
-        return pd.DataFrame()
+    except Exception as e:
+        logger.warning("Falha na API de termos, ativando cooldown e usando fallback: %s", e)
+        _set_api_cooldown()
+        fallback = _read_cache_fallback(CACHE_TERMS_PATH)
+        return pd.DataFrame(fallback) if fallback else pd.DataFrame()
+
 
 
 
