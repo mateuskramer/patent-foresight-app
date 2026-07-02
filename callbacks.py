@@ -130,6 +130,15 @@ def register_callbacks(app, page_routes):
                   Input("url", "pathname"), Input("url", "search"))
     def render_page(pathname, search):
         try:
+            import data
+            # Se os dados estão vazios (por exemplo, devido ao cold start da API no Render), tenta recarregar
+            if data.df_patents.empty or data.terms_df.empty:
+                logger.warning("Dados vazios na renderização da página %s. Tentando recarregar da API...", pathname)
+                try:
+                    data.refresh_data()
+                except Exception as ex:
+                    logger.error("Falha ao recarregar dados na renderização da página: %s", ex)
+
             layout_fn = page_routes.get(pathname, page_routes["/"])
             # passa search só para o builder (que sabe ler ?sid=)
             if pathname == "/dashboards":

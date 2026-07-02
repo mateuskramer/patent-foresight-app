@@ -377,10 +377,11 @@ def build_graph(root_term, df, depth=3, top_n=5):
             frontier.append((t, level + 1))
     return G
 
-def similar_patents(idx, df, EMB, top_n=10):
-    if len(EMB) == 0 or idx >= len(EMB):
+def similar_patents(idx, df, EMB_arg=None, top_n=10):
+    current_emb = EMB_arg if (EMB_arg is not None and len(EMB_arg) > 0) else EMB
+    if len(current_emb) == 0 or idx >= len(current_emb):
         return pd.DataFrame()
-    sims = cosine_similarity(EMB[idx].reshape(1, -1), EMB)[0]
+    sims = cosine_similarity(current_emb[idx].reshape(1, -1), current_emb)[0]
     out  = df.copy()
     out["similarity"] = sims
     return out[out.index != idx].sort_values("similarity", ascending=False).head(top_n)
@@ -398,21 +399,25 @@ def prepare_sparse_engine(df_terms):
     C.setdiag(0)
     return C, {t: i for i, t in idx_to_term.items()}, idx_to_term
 
-def get_sparse_opportunities(target_term, C, t_map, idx_map, top_n=20):
-    if C is None or target_term not in t_map:
+def get_sparse_opportunities(target_term, C=None, t_map_arg=None, idx_map_arg=None, top_n=20):
+    current_C = C if C is not None else C_matrix
+    current_t_map = t_map_arg if t_map_arg else t_map
+    current_idx_map = idx_map_arg if idx_map_arg else idx_map
+
+    if current_C is None or target_term not in current_t_map:
         return pd.DataFrame()
-    idx      = t_map[target_term]
-    direct   = C[idx].toarray().flatten()
-    indirect = (C @ C[idx].T).toarray().flatten()
+    idx      = current_t_map[target_term]
+    direct   = current_C[idx].toarray().flatten()
+    indirect = (current_C @ current_C[idx].T).toarray().flatten()
     mask     = (indirect > 0) & (direct == 0)
     mask[idx]= False
     p_idx    = np.where(mask)[0]
     if not len(p_idx):
         return pd.DataFrame()
-    max_v = C.max() or 1
+    max_v = current_C.max() or 1
     return (
         pd.DataFrame([{
-            "term":           idx_map[i],
+            "term":           current_idx_map[i],
             "bridge_strength": int(indirect[i]),
             "score":          round(indirect[i] / max_v, 4),
         } for i in p_idx])
@@ -440,8 +445,22 @@ def refresh_data():
 
     logger.info("Carregando dados...")
 
-    df_patents = load_patents()
-    terms_df   = load_terms()
+    new_patents = load_patents()
+    new_terms   = load_terms()
+
+    # Atualiza df_patents in-place para manter referências em outros arquivos
+    df_patents.drop(df_patents.index, inplace=True)
+    for col in list(df_patents.columns):
+        del df_patents[col]
+    for col in new_patents.columns:
+        df_patents[col] = new_patents[col]
+
+    # Atualiza terms_df in-place para manter referências em outros arquivos
+    terms_df.drop(terms_df.index, inplace=True)
+    for col in list(terms_df.columns):
+        del terms_df[col]
+    for col in new_terms.columns:
+        terms_df[col] = new_terms[col]
 
     # FIX: vstack protegido contra embeddings com shapes diferentes
     if not df_patents.empty and "embedding" in df_patents.columns:
@@ -452,29 +471,59 @@ def refresh_data():
             logger.warning("Embeddings com shapes inconsistentes, filtrando", exc_info=True)
             first_shape = emb_list[0].shape
             mask        = [e.shape == first_shape for e in emb_list]
-            df_patents  = df_patents[mask].reset_index(drop=True)
+            
+            # Filtra df_patents in-place
+            filtered_patents = df_patents[mask].reset_index(drop=True)
+            df_patents.drop(df_patents.index, inplace=True)
+            for col in list(df_patents.columns):
+                del df_patents[col]
+            for col in filtered_patents.columns:
+                df_patents[col] = filtered_patents[col]
+                
             EMB         = np.vstack([e for e, ok in zip(emb_list, mask) if ok])
     else:
         EMB = np.array([])
 
-    C_matrix, t_map, idx_map = (
+    new_C, new_t_map, new_idx_map = (
         prepare_sparse_engine(terms_df) if not terms_df.empty else (None, {}, {})
     )
+    C_matrix = new_C
+    
+    # Atualiza t_map in-place
+    t_map.clear()
+    t_map.update(new_t_map)
+    
+    # Atualiza idx_map in-place
+    idx_map.clear()
+    idx_map.update(new_idx_map)
 
-    term_list = (
+    new_term_list = (
         terms_df["term"].value_counts().index.tolist()[:500]
         if not terms_df.empty else []
     )
+    # Atualiza term_list in-place para manter referências em outros arquivos (ex: app.py)
+    term_list.clear()
+    term_list.extend(new_term_list)
 
-    patent_opts = (
+    new_patent_opts = (
         [{"label": f"{r['id']} - {str(r['title'])[:40]}", "value": i}
          for i, r in df_patents.iterrows()]
         if not df_patents.empty else []
     )
+    # Atualiza patent_opts in-place para manter referências em outros arquivos (ex: app.py)
+    patent_opts.clear()
+    patent_opts.extend(new_patent_opts)
 
     # dados novos invalidam qualquer cálculo cacheado da geração anterior
     clear_calc_cache()
     clear_unique_terms_cache()
+    
+    # invalidar o snapshot de chat_sessions se importado
+    try:
+        from chat import invalidate_db_snapshot
+        invalidate_db_snapshot()
+    except Exception:
+        pass
 
     if not df_patents.empty and not terms_df.empty:
         logger.info("Pronto! %d patentes, %d termos.", len(df_patents), len(term_list))
@@ -512,7 +561,5 @@ def refresh_data():
         except Exception as e:
             logger.warning("API /terms/associations falhou: %s", e, exc_info=True)
             print(f"API /terms/associations falhou: {e}")
-
-
 
 refresh_data()

@@ -742,7 +742,6 @@ EXAMPLES = [
     "Heatmap dos top 8 termos",
     "Ranking por growth%",
     "Waterfall mensal do termo mais popular",
-    "Compare AI vs machine learning vs deep learning",
 ]
 
 # ─── Layout ───────────────────────────────────────────────────────────────────
