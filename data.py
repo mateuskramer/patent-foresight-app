@@ -60,11 +60,24 @@ def run_write(query, params=None):
 API_BASE_URL = os.getenv("API_BASE_URL", "https://apipatent.onrender.com").rstrip("/")
 API_KEY = os.getenv("API_KEY", "")
 
+def requests_get_with_retry(url, timeout=90, max_retries=4, delay=10):
+    import time
+    for attempt in range(max_retries):
+        try:
+            logger.info("Requisitando API (tentativa %d/%d): %s", attempt + 1, max_retries, url)
+            r = requests.get(url, timeout=timeout)
+            r.raise_for_status()
+            return r
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.warning("API request failed (attempt %d/%d): %s. Retrying in %ds...", attempt + 1, max_retries, e, delay)
+                time.sleep(delay)
+            else:
+                raise e
 
 def load_patents():
     try:
-        r = requests.get(f"{API_BASE_URL}/patents", timeout=30)
-        r.raise_for_status()
+        r = requests_get_with_retry(f"{API_BASE_URL}/patents")
         data = r.json()
         df = pd.DataFrame(data)
         if not df.empty and "embedding" in df.columns:
@@ -92,13 +105,13 @@ PALETTE = ["#2563eb", "#e74c3c", "#22c55e", "#f39c12", "#9b59b6"]
 
 def load_terms():
     try:
-        r = requests.get(f"{API_BASE_URL}/terms/associations", timeout=30)
-        r.raise_for_status()
+        r = requests_get_with_retry(f"{API_BASE_URL}/terms/associations")
         data = r.json()
         return pd.DataFrame(data)
     except Exception:
         logger.error("Erro ao carregar termos da API", exc_info=True)
         return pd.DataFrame()
+
 
 
 def monthly_term_count(term, df):
