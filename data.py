@@ -640,21 +640,40 @@ def refresh_data():
             print(f"API /health falhou: {e}")
             
         # Testar /patents
+        saved_patents = False
         try:
-            r = requests.get(f"{API_BASE_URL}/patents", timeout=15)
+            r = requests.get(f"{API_BASE_URL}/patents", timeout=30)
             logger.warning("API /patents status: %d | tamanho da resposta: %d bytes", r.status_code, len(r.content))
             print(f"API /patents status: {r.status_code} | tamanho: {len(r.content)} bytes")
+            if r.status_code == 200:
+                data = r.json()
+                _write_cache(CACHE_PATENTS_PATH, data)
+                saved_patents = True
+                logger.warning("Cache de patentes salvo via diagnóstico.")
         except Exception as e:
             logger.warning("API /patents falhou: %s", e, exc_info=True)
             print(f"API /patents falhou: {e}")
             
         # Testar /terms/associations
+        saved_terms = False
         try:
-            r = requests.get(f"{API_BASE_URL}/terms/associations", timeout=15)
+            r = requests.get(f"{API_BASE_URL}/terms/associations", timeout=20)
             logger.warning("API /terms/associations status: %d | tamanho: %d bytes", r.status_code, len(r.content))
             print(f"API /terms/associations status: {r.status_code} | tamanho: {len(r.content)} bytes")
+            if r.status_code == 200:
+                data = r.json()
+                _write_cache(CACHE_TERMS_PATH, data)
+                saved_terms = True
+                logger.warning("Cache de termos salvo via diagnóstico.")
         except Exception as e:
             logger.warning("API /terms/associations falhou: %s", e, exc_info=True)
             print(f"API /terms/associations falhou: {e}")
+
+        # Se ambos os caches foram salvos com sucesso pelo diagnóstico, recarrega e limpa o cooldown
+        if saved_patents and saved_terms:
+            _clear_api_cooldown()
+            logger.warning("Sincronização via diagnóstico concluída com sucesso. Recarregando dataframes...")
+            print("Sincronização via diagnóstico concluída com sucesso. Recarregando dataframes...")
+            refresh_data()
 
 refresh_data()
