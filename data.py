@@ -129,7 +129,7 @@ def _write_cache(path, data):
     except Exception as e:
         logger.warning("Erro ao salvar cache em %s: %s", path, e)
 
-def requests_get_with_retry(url, timeout=12, max_retries=2, delay=2):
+def requests_get_with_retry(url, timeout=30, max_retries=2, delay=2):
     for attempt in range(max_retries):
         try:
             logger.info("Requisitando API (tentativa %d/%d): %s", attempt + 1, max_retries, url)
