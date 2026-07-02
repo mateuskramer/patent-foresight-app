@@ -543,6 +543,61 @@ def refresh_data():
     new_patents = load_patents()
     new_terms   = load_terms()
 
+    # Se estiver vazio, roda o diagnóstico e tenta carregar do cache recém-criado
+    if new_patents.empty or new_terms.empty:
+        logger.warning("DADOS VAZIOS OU PARCIAIS DETECTADOS NO STARTUP!")
+        print("=== DADOS VAZIOS OU PARCIAIS DETECTADOS NO STARTUP! ===")
+        print(f"API_BASE_URL configurada: {API_BASE_URL}")
+        logger.warning("Iniciando diagnósticos da API...")
+        logger.warning("API_BASE_URL configurada: %s", API_BASE_URL)
+        
+        # Testar /health
+        try:
+            r = requests.get(f"{API_BASE_URL}/health", timeout=10)
+            logger.warning("API /health status: %d | body: %s", r.status_code, r.text.strip())
+            print(f"API /health status: {r.status_code} | body: {r.text.strip()}")
+        except Exception as e:
+            logger.warning("API /health falhou: %s", e, exc_info=True)
+            print(f"API /health falhou: {e}")
+            
+        # Testar /patents
+        saved_patents = False
+        try:
+            r = requests.get(f"{API_BASE_URL}/patents", timeout=30)
+            logger.warning("API /patents status: %d | tamanho da resposta: %d bytes", r.status_code, len(r.content))
+            print(f"API /patents status: {r.status_code} | tamanho: {len(r.content)} bytes")
+            if r.status_code == 200:
+                data = r.json()
+                _write_cache(CACHE_PATENTS_PATH, data)
+                saved_patents = True
+                logger.warning("Cache de patentes salvo via diagnóstico.")
+        except Exception as e:
+            logger.warning("API /patents falhou: %s", e, exc_info=True)
+            print(f"API /patents falhou: {e}")
+            
+        # Testar /terms/associations
+        saved_terms = False
+        try:
+            r = requests.get(f"{API_BASE_URL}/terms/associations", timeout=20)
+            logger.warning("API /terms/associations status: %d | tamanho: %d bytes", r.status_code, len(r.content))
+            print(f"API /terms/associations status: {r.status_code} | tamanho: {len(r.content)} bytes")
+            if r.status_code == 200:
+                data = r.json()
+                _write_cache(CACHE_TERMS_PATH, data)
+                saved_terms = True
+                logger.warning("Cache de termos salvo via diagnóstico.")
+        except Exception as e:
+            logger.warning("API /terms/associations falhou: %s", e, exc_info=True)
+            print(f"API /terms/associations falhou: {e}")
+
+        # Se ambos os caches foram salvos com sucesso pelo diagnóstico, recarrega e limpa o cooldown
+        if saved_patents and saved_terms:
+            _clear_api_cooldown()
+            logger.warning("Sincronização via diagnóstico concluída com sucesso. Carregando dados do cache...")
+            print("Sincronização via diagnóstico concluída com sucesso. Carregando dados do cache...")
+            new_patents = load_patents()
+            new_terms = load_terms()
+
     # Atualiza df_patents in-place para manter referências em outros arquivos
     df_patents.drop(df_patents.index, inplace=True)
     for col in list(df_patents.columns):
@@ -627,53 +682,5 @@ def refresh_data():
         logger.warning("DADOS VAZIOS OU PARCIAIS DETECTADOS NO STARTUP!")
         print("=== DADOS VAZIOS OU PARCIAIS DETECTADOS NO STARTUP! ===")
         print(f"API_BASE_URL configurada: {API_BASE_URL}")
-        logger.warning("Iniciando diagnósticos da API...")
-        logger.warning("API_BASE_URL configurada: %s", API_BASE_URL)
-        
-        # Testar /health
-        try:
-            r = requests.get(f"{API_BASE_URL}/health", timeout=10)
-            logger.warning("API /health status: %d | body: %s", r.status_code, r.text.strip())
-            print(f"API /health status: {r.status_code} | body: {r.text.strip()}")
-        except Exception as e:
-            logger.warning("API /health falhou: %s", e, exc_info=True)
-            print(f"API /health falhou: {e}")
-            
-        # Testar /patents
-        saved_patents = False
-        try:
-            r = requests.get(f"{API_BASE_URL}/patents", timeout=30)
-            logger.warning("API /patents status: %d | tamanho da resposta: %d bytes", r.status_code, len(r.content))
-            print(f"API /patents status: {r.status_code} | tamanho: {len(r.content)} bytes")
-            if r.status_code == 200:
-                data = r.json()
-                _write_cache(CACHE_PATENTS_PATH, data)
-                saved_patents = True
-                logger.warning("Cache de patentes salvo via diagnóstico.")
-        except Exception as e:
-            logger.warning("API /patents falhou: %s", e, exc_info=True)
-            print(f"API /patents falhou: {e}")
-            
-        # Testar /terms/associations
-        saved_terms = False
-        try:
-            r = requests.get(f"{API_BASE_URL}/terms/associations", timeout=20)
-            logger.warning("API /terms/associations status: %d | tamanho: %d bytes", r.status_code, len(r.content))
-            print(f"API /terms/associations status: {r.status_code} | tamanho: {len(r.content)} bytes")
-            if r.status_code == 200:
-                data = r.json()
-                _write_cache(CACHE_TERMS_PATH, data)
-                saved_terms = True
-                logger.warning("Cache de termos salvo via diagnóstico.")
-        except Exception as e:
-            logger.warning("API /terms/associations falhou: %s", e, exc_info=True)
-            print(f"API /terms/associations falhou: {e}")
-
-        # Se ambos os caches foram salvos com sucesso pelo diagnóstico, recarrega e limpa o cooldown
-        if saved_patents and saved_terms:
-            _clear_api_cooldown()
-            logger.warning("Sincronização via diagnóstico concluída com sucesso. Recarregando dataframes...")
-            print("Sincronização via diagnóstico concluída com sucesso. Recarregando dataframes...")
-            refresh_data()
 
 refresh_data()
