@@ -479,7 +479,30 @@ def refresh_data():
     if not df_patents.empty and not terms_df.empty:
         logger.info("Pronto! %d patentes, %d termos.", len(df_patents), len(term_list))
     else:
-        logger.warning("Dados parciais — verifique conexão com o banco.")
+        logger.warning("DADOS VAZIOS OU PARCIAIS DETECTADOS NO STARTUP!")
+        logger.warning("Iniciando diagnósticos da API...")
+        logger.warning("API_BASE_URL configurada: %s", API_BASE_URL)
+        
+        # Testar /health
+        try:
+            r = requests.get(f"{API_BASE_URL}/health", timeout=10)
+            logger.warning("API /health status: %d | body: %s", r.status_code, r.text.strip())
+        except Exception as e:
+            logger.warning("API /health falhou: %s", e, exc_info=True)
+            
+        # Testar /patents
+        try:
+            r = requests.get(f"{API_BASE_URL}/patents", timeout=15)
+            logger.warning("API /patents status: %d | tamanho da resposta: %d bytes", r.status_code, len(r.content))
+        except Exception as e:
+            logger.warning("API /patents falhou: %s", e, exc_info=True)
+            
+        # Testar /terms/associations
+        try:
+            r = requests.get(f"{API_BASE_URL}/terms/associations", timeout=15)
+            logger.warning("API /terms/associations status: %d | tamanho: %d bytes", r.status_code, len(r.content))
+        except Exception as e:
+            logger.warning("API /terms/associations falhou: %s", e, exc_info=True)
 
 
 refresh_data()
