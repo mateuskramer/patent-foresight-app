@@ -247,11 +247,20 @@ def register_callbacks(app, page_routes):
         function(children) {
             const urlParams = new URLSearchParams(window.location.search);
             if (urlParams.get("force_refresh") === "true") {
+                // Se o gatilho de wake-up AINDA está na tela, significa que ainda estamos aguardando a API.
+                // Mantemos o parâmetro na URL para ativar a trava de segurança e impedir reloads automáticos.
+                if (document.getElementById("wake-up-trigger")) {
+                    console.log("[WAKE-UP] Aguardando API. Mantendo trava de segurança na URL.");
+                    return window.dash_clientside.no_update;
+                }
+                
+                // Se o gatilho sumiu, significa que a página de dados carregou com sucesso!
+                // Agora é seguro limpar a URL.
                 urlParams.delete("force_refresh");
                 const newSearch = urlParams.toString();
                 const newUrl = window.location.pathname + (newSearch ? "?" + newSearch : "");
                 window.history.replaceState({}, document.title, newUrl);
-                console.log("[WAKE-UP] Parâmetro force_refresh removido da URL.");
+                console.log("[WAKE-UP] Dados carregados! Trava de segurança removida da URL.");
             }
             return window.dash_clientside.no_update;
         }
