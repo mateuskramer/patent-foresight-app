@@ -142,12 +142,10 @@ def _ai_cache_set(key: str, value: str):
     _AI_CACHE[key] = (value, time.time())
 
 
-_LAST_REFRESH_ATTEMPT = 0
-REFRESH_COOLDOWN = 30  # segundos
-
 def api_waiting_layout(pathname):
     return html.Div([
-        html.Div(id="wake-up-trigger", style={"display": "none"}),  # Gatilho para o clientside callback
+        # Insere um iframe invisível que faz a chamada à API nativamente pelo navegador, acordando o Render em segundo plano.
+        html.Iframe(src=f"{API_BASE_URL}/health", style={"display": "none"}),
         dbc.Card(
             dbc.CardBody([
                 html.Div([
@@ -183,120 +181,21 @@ def api_waiting_layout(pathname):
 def register_callbacks(app, page_routes):
 
     # =========================================================================
-    # WAKE-UP AUTOMÁTICO VIA CLIENTE (NAVEGADOR DO USUÁRIO)
-    # =========================================================================
-    app.clientside_callback(
-        f"""
-        function(trigger_id) {{
-            if (!trigger_id) {{
-                return "";
-            }}
-            
-            // Trava de Segurança: Se a URL já tem o parâmetro, significa que o reload forçado falhou.
-            // Paramos para evitar loop infinito de recargas se o backend falhar.
-            const urlParams = new URLSearchParams(window.location.search);
-            if (urlParams.get("force_refresh") === "true") {{
-                console.warn("[WAKE-UP] O reload forçado já foi tentado e falhou. Parando para evitar loop.");
-                return "Erro no carregamento do Servidor";
-            }}
-            
-            console.log("[WAKE-UP] Criando iframe oculto para acordar a API...");
-            
-            // Função para redirecionar com o parâmetro de atualização forçada
-            function redirectToRefresh() {{
-                const url = new URL(window.location.href);
-                url.searchParams.set("force_refresh", "true");
-                window.location.href = url.pathname + url.search;
-            }}
-            
-            // Cria e insere um iframe oculto apontando para o /health da API
-            const iframe = document.createElement("iframe");
-            iframe.src = "{API_BASE_URL}/health";
-            iframe.style.display = "none";
-            
-            // Define um timeout de segurança de 15 segundos caso o onload demore muito
-            const timeoutId = setTimeout(() => {{
-                console.log("[WAKE-UP] Timeout de 15s atingido no iframe. Forçando recarga...");
-                redirectToRefresh();
-            }}, 15000);
-            
-            iframe.onload = function() {{
-                clearTimeout(timeoutId);
-                console.log("[WAKE-UP] Iframe carregado com sucesso. Recarregando...");
-                redirectToRefresh();
-            }};
-            
-            iframe.onerror = function() {{
-                clearTimeout(timeoutId);
-                console.log("[WAKE-UP] Erro no carregamento do iframe. Recarregando...");
-                redirectToRefresh();
-            }};
-            
-            document.body.appendChild(iframe);
-            return "Iniciado via Iframe";
-        }}
-        """,
-        Output("wake-up-status-div", "children"),
-        Input("wake-up-trigger", "id"),
-        prevent_initial_call=True
-    )
-
-    # Remove o parâmetro force_refresh da URL do navegador após o carregamento bem-sucedido
-    app.clientside_callback(
-        """
-        function(children) {
-            const urlParams = new URLSearchParams(window.location.search);
-            if (urlParams.get("force_refresh") === "true") {
-                // Se o gatilho de wake-up AINDA está na tela, significa que ainda estamos aguardando a API.
-                // Mantemos o parâmetro na URL para ativar a trava de segurança e impedir reloads automáticos.
-                if (document.getElementById("wake-up-trigger")) {
-                    console.log("[WAKE-UP] Aguardando API. Mantendo trava de segurança na URL.");
-                    return window.dash_clientside.no_update;
-                }
-                
-                // Se o gatilho sumiu, significa que a página de dados carregou com sucesso!
-                // Agora é seguro limpar a URL.
-                urlParams.delete("force_refresh");
-                const newSearch = urlParams.toString();
-                const newUrl = window.location.pathname + (newSearch ? "?" + newSearch : "");
-                window.history.replaceState({}, document.title, newUrl);
-                console.log("[WAKE-UP] Dados carregados! Trava de segurança removida da URL.");
-            }
-            return window.dash_clientside.no_update;
-        }
-        """,
-        Output("wake-up-status-div", "className"),
-        Input("page-content", "children"),
-        prevent_initial_call=True
-    )
-
-    # =========================================================================
     # NAVEGAÇÃO
     # =========================================================================
     @app.callback(Output("page-content", "children"),
                   Input("url", "pathname"), Input("url", "search"))
     def render_page(pathname, search):
-        global _LAST_REFRESH_ATTEMPT
         try:
             import data
             
-            # Parse robusto e correto do parâmetro force_refresh
-            force_refresh = False
-            if search:
-                import urllib.parse
-                query_params = urllib.parse.parse_qs(search.lstrip('?'))
-                force_refresh = query_params.get('force_refresh', [None])[0] == 'true'
-
-            # Se os dados estão vazios (por exemplo, devido ao cold start da API no Render), tenta recarregar com cooldown (bypassado se force_refresh=True)
+            # Se os dados estão vazios (por exemplo, devido ao cold start da API no Render), tenta recarregar imediatamente
             if data.df_patents.empty or data.terms_df.empty:
-                now = time.time()
-                if force_refresh or (now - _LAST_REFRESH_ATTEMPT > REFRESH_COOLDOWN):
-                    _LAST_REFRESH_ATTEMPT = now
-                    logger.warning("Dados vazios na renderização da página %s (force_refresh=%s). Tentando recarregar da API...", pathname, force_refresh)
-                    try:
-                        data.refresh_data()
-                    except Exception as ex:
-                        logger.error("Falha ao recarregar dados na renderização da página: %s", ex)
+                logger.warning("Dados vazios na renderização da página %s. Tentando recarregar da API...", pathname)
+                try:
+                    data.refresh_data()
+                except Exception as ex:
+                    logger.error("Falha ao recarregar dados na renderização da página: %s", ex)
 
             # Se mesmo após a tentativa de refresh os dados ainda estiverem vazios, exibe a tela de carregamento amigável
             if data.df_patents.empty or data.terms_df.empty:
