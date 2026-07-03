@@ -196,36 +196,44 @@ def register_callbacks(app, page_routes):
             // Paramos para evitar loop infinito de recargas se o backend falhar.
             const urlParams = new URLSearchParams(window.location.search);
             if (urlParams.get("force_refresh") === "true") {{
-                console.warn("[WAKE-UP] O reload forçado já foi tentado e falhou. Parando polling para evitar loop.");
+                console.warn("[WAKE-UP] O reload forçado já foi tentado e falhou. Parando para evitar loop.");
                 return "Erro no carregamento do Servidor";
             }}
             
-            console.log("[WAKE-UP] Gatilho de wake-up montado no DOM. Iniciando polling...");
+            console.log("[WAKE-UP] Criando iframe oculto para acordar a API...");
             
-            async function wake() {{
-                while (true) {{
-                    try {{
-                        console.log("[WAKE-UP] Verificando se a API acordou...");
-                        const r = await fetch("{API_BASE_URL}/health");
-                        if (r.ok) {{
-                            console.log("[WAKE-UP] API respondeu 200 OK! Recarregando com force_refresh...");
-                            break;
-                        }}
-                        console.warn("[WAKE-UP] API retornou status: " + r.status + ". Aguardando 2s...");
-                    }} catch (e) {{
-                        console.warn("[WAKE-UP] Falha de conexão/CORS. Aguardando 2s...");
-                    }}
-                    await new Promise(r => setTimeout(r, 2000));
-                }}
-                
-                // Navega para a URL com o parâmetro de recarga forçada usando URLSearchParams
+            // Função para redirecionar com o parâmetro de atualização forçada
+            function redirectToRefresh() {{
                 const url = new URL(window.location.href);
                 url.searchParams.set("force_refresh", "true");
                 window.location.href = url.pathname + url.search;
             }}
             
-            wake();
-            return "Iniciado";
+            // Cria e insere um iframe oculto apontando para o /health da API
+            const iframe = document.createElement("iframe");
+            iframe.src = "{API_BASE_URL}/health";
+            iframe.style.display = "none";
+            
+            // Define um timeout de segurança de 15 segundos caso o onload demore muito
+            const timeoutId = setTimeout(() => {{
+                console.log("[WAKE-UP] Timeout de 15s atingido no iframe. Forçando recarga...");
+                redirectToRefresh();
+            }}, 15000);
+            
+            iframe.onload = function() {{
+                clearTimeout(timeoutId);
+                console.log("[WAKE-UP] Iframe carregado com sucesso. Recarregando...");
+                redirectToRefresh();
+            }};
+            
+            iframe.onerror = function() {{
+                clearTimeout(timeoutId);
+                console.log("[WAKE-UP] Erro no carregamento do iframe. Recarregando...");
+                redirectToRefresh();
+            }};
+            
+            document.body.appendChild(iframe);
+            return "Iniciado via Iframe";
         }}
         """,
         Output("wake-up-status-div", "children"),
