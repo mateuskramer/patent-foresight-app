@@ -66,7 +66,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(BASE_DIR, ".cache")
 CACHE_PATENTS_PATH = os.path.join(CACHE_DIR, "patents.json")
 CACHE_TERMS_PATH = os.path.join(CACHE_DIR, "terms.json")
-CACHE_TTL = 600  # 10 minutos
+CACHE_TTL = 86400  # 24 horas (dados estáveis de patentes)
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 COOLDOWN_PATH = os.path.join(CACHE_DIR, "cooldown.txt")
@@ -129,13 +129,39 @@ def _write_cache(path, data):
     except Exception as e:
         logger.warning("Erro ao salvar cache em %s: %s", path, e)
 
-def requests_get_with_retry(url, timeout=30, max_retries=2, delay=2):
+def requests_get_with_retry(url, timeout=30, max_retries=3, delay=3):
+    import random
+    # Adiciona pequeno jitter inicial para evitar que múltiplos workers batam no exato mesmo milissegundo
+    time.sleep(random.uniform(0.1, 0.5))
+    
     for attempt in range(max_retries):
         try:
             logger.info("Requisitando API (tentativa %d/%d): %s", attempt + 1, max_retries, url)
             r = requests.get(url, timeout=timeout)
+            
+            # Se for 429, trata com recuo (backoff) explícito
+            if r.status_code == 429:
+                retry_after = r.headers.get("Retry-After")
+                wait_time = int(retry_after) if (retry_after and retry_after.isdigit()) else (delay * (attempt + 1) * 2)
+                logger.warning("API retornou 429 (Too Many Requests). Aguardando %ds antes de tentar novamente...", wait_time)
+                time.sleep(wait_time)
+                continue
+                
             r.raise_for_status()
             return r
+        except requests.exceptions.HTTPError as http_err:
+            if http_err.response is not None and http_err.response.status_code == 429:
+                retry_after = http_err.response.headers.get("Retry-After")
+                wait_time = int(retry_after) if (retry_after and retry_after.isdigit()) else (delay * (attempt + 1) * 2)
+                logger.warning("API retornou 429. Aguardando %ds...", wait_time)
+                time.sleep(wait_time)
+                continue
+            
+            if attempt < max_retries - 1:
+                logger.warning("API HTTP error (attempt %d/%d): %s. Retrying in %ds...", attempt + 1, max_retries, http_err, delay)
+                time.sleep(delay)
+            else:
+                raise http_err
         except Exception as e:
             if attempt < max_retries - 1:
                 logger.warning("API request failed (attempt %d/%d): %s. Retrying in %ds...", attempt + 1, max_retries, e, delay)
@@ -149,22 +175,71 @@ def load_patents():
         logger.info("Carregando patentes do cache local.")
         df = pd.DataFrame(cached)
     else:
-        if _is_api_in_cooldown():
-            logger.warning("API em cooldown devido a falha recente. Ignorando chamada de patentes.")
-            fallback = _read_cache_fallback(CACHE_PATENTS_PATH)
-            df = pd.DataFrame(fallback) if fallback else pd.DataFrame()
-        else:
+        df = pd.DataFrame()
+        # Implementação de Trava de Arquivo (.lock) contra concorrência de workers no cold start
+        lock_path = CACHE_PATENTS_PATH + ".lock"
+        for _ in range(30):
+            if os.path.exists(lock_path) and (time.time() - os.path.getmtime(lock_path) < 60):
+                logger.info("Outro worker está baixando as patentes. Aguardando cache local...")
+                time.sleep(2)
+                cached = _read_cache(CACHE_PATENTS_PATH)
+                if cached is not None:
+                    logger.info("Carregando patentes do cache recém-criado por outro worker.")
+                    df = pd.DataFrame(cached)
+                    break
+            else:
+                # Se o lock foi removido ou não existia, tenta ler o cache de novo antes de ir à API
+                cached = _read_cache(CACHE_PATENTS_PATH)
+                if cached is not None:
+                    logger.info("Carregando patentes do cache local.")
+                    df = pd.DataFrame(cached)
+                break
+
+        # Se após aguardar o lock ainda estiver vazio, este worker busca na API
+        if df.empty:
+            # Cria o arquivo de lock
             try:
-                r = requests_get_with_retry(f"{API_BASE_URL}/patents")
-                data = r.json()
-                _write_cache(CACHE_PATENTS_PATH, data)
-                _clear_api_cooldown()
-                df = pd.DataFrame(data)
-            except Exception as e:
-                logger.warning("Falha na API de patentes, ativando cooldown e usando fallback: %s", e)
-                _set_api_cooldown()
-                fallback = _read_cache_fallback(CACHE_PATENTS_PATH)
-                df = pd.DataFrame(fallback) if fallback else pd.DataFrame()
+                with open(lock_path, "w", encoding="utf-8") as f:
+                    f.write(str(os.getpid()))
+            except Exception:
+                pass
+                
+            try:
+                if _is_api_in_cooldown():
+                    logger.warning("API em cooldown devido a falha recente. Ignorando chamada de patentes.")
+                    fallback = _read_cache_fallback(CACHE_PATENTS_PATH)
+                    df = pd.DataFrame(fallback) if fallback else pd.DataFrame()
+                else:
+                    # Envia um ping leve de wake-up para o /health antes de puxar dados pesados (timeout longo 60s)
+                    try:
+                        logger.info("Enviando ping de wake-up para o endpoint /health da API...")
+                        r_health = requests.get(f"{API_BASE_URL}/health", timeout=60)
+                        if r_health.status_code == 429:
+                            logger.warning("API /health retornou 429 (já acordada). Prosseguindo...")
+                        else:
+                            r_health.raise_for_status()
+                            logger.info("API acordada com sucesso (resposta /health: %s).", r_health.text.strip())
+                    except Exception as wake_err:
+                        logger.warning("Falha ou timeout no ping de wake-up da API: %s. Continuando...", wake_err)
+
+                    try:
+                        r = requests_get_with_retry(f"{API_BASE_URL}/patents", timeout=30)
+                        data = r.json()
+                        _write_cache(CACHE_PATENTS_PATH, data)
+                        _clear_api_cooldown()
+                        df = pd.DataFrame(data)
+                    except Exception as e:
+                        logger.warning("Falha na API de patentes, ativando cooldown e usando fallback: %s", e)
+                        _set_api_cooldown()
+                        fallback = _read_cache_fallback(CACHE_PATENTS_PATH)
+                        df = pd.DataFrame(fallback) if fallback else pd.DataFrame()
+            finally:
+                # Remove o arquivo de lock
+                try:
+                    if os.path.exists(lock_path):
+                        os.remove(lock_path)
+                except Exception:
+                    pass
 
     if not df.empty and "embedding" in df.columns:
         df["embedding"] = df["embedding"].apply(
@@ -190,21 +265,59 @@ def load_terms():
     if cached is not None:
         logger.info("Carregando termos do cache local.")
         return pd.DataFrame(cached)
-    if _is_api_in_cooldown():
-        logger.warning("API em cooldown devido a falha recente. Ignorando chamada de termos.")
-        fallback = _read_cache_fallback(CACHE_TERMS_PATH)
-        return pd.DataFrame(fallback) if fallback else pd.DataFrame()
+        
+    # Implementação de Trava de Arquivo (.lock) contra concorrência de workers no cold start
+    lock_path = CACHE_TERMS_PATH + ".lock"
+    for _ in range(30):
+        if os.path.exists(lock_path) and (time.time() - os.path.getmtime(lock_path) < 60):
+            logger.info("Outro worker está baixando os termos. Aguardando cache local...")
+            time.sleep(2)
+            cached = _read_cache(CACHE_TERMS_PATH)
+            if cached is not None:
+                logger.info("Carregando termos do cache recém-criado por outro worker.")
+                return pd.DataFrame(cached)
+        else:
+            # Se o lock foi removido ou não existia, tenta ler o cache de novo antes de ir à API
+            cached = _read_cache(CACHE_TERMS_PATH)
+            if cached is not None:
+                logger.info("Carregando termos do cache local.")
+                return pd.DataFrame(cached)
+            break
+
+    # Se após aguardar o lock ainda estiver vazio, este worker busca na API
+    # Cria o arquivo de lock
     try:
-        r = requests_get_with_retry(f"{API_BASE_URL}/terms/associations")
-        data = r.json()
-        _write_cache(CACHE_TERMS_PATH, data)
-        _clear_api_cooldown()
-        return pd.DataFrame(data)
-    except Exception as e:
-        logger.warning("Falha na API de termos, ativando cooldown e usando fallback: %s", e)
-        _set_api_cooldown()
-        fallback = _read_cache_fallback(CACHE_TERMS_PATH)
-        return pd.DataFrame(fallback) if fallback else pd.DataFrame()
+        with open(lock_path, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+    except Exception:
+        pass
+        
+    try:
+        if _is_api_in_cooldown():
+            logger.warning("API em cooldown devido a falha recente. Ignorando chamada de termos.")
+            fallback = _read_cache_fallback(CACHE_TERMS_PATH)
+            df = pd.DataFrame(fallback) if fallback else pd.DataFrame()
+        else:
+            try:
+                r = requests_get_with_retry(f"{API_BASE_URL}/terms/associations", timeout=30)
+                data = r.json()
+                _write_cache(CACHE_TERMS_PATH, data)
+                _clear_api_cooldown()
+                df = pd.DataFrame(data)
+            except Exception as e:
+                logger.warning("Falha na API de termos, ativando cooldown e usando fallback: %s", e)
+                _set_api_cooldown()
+                fallback = _read_cache_fallback(CACHE_TERMS_PATH)
+                df = pd.DataFrame(fallback) if fallback else pd.DataFrame()
+    finally:
+        # Remove o arquivo de lock
+        try:
+            if os.path.exists(lock_path):
+                os.remove(lock_path)
+        except Exception:
+            pass
+            
+    return df
 
 
 
@@ -541,6 +654,10 @@ def refresh_data():
     logger.info("Carregando dados...")
 
     new_patents = load_patents()
+    
+    # Intervalo de 1.5s entre chamadas sequenciais pesadas para respeitar o rate-limiter da API
+    time.sleep(1.5)
+    
     new_terms   = load_terms()
 
     # Se estiver vazio, roda o diagnóstico e tenta carregar do cache recém-criado
@@ -548,55 +665,61 @@ def refresh_data():
         logger.warning("DADOS VAZIOS OU PARCIAIS DETECTADOS NO STARTUP!")
         print("=== DADOS VAZIOS OU PARCIAIS DETECTADOS NO STARTUP! ===")
         print(f"API_BASE_URL configurada: {API_BASE_URL}")
-        logger.warning("Iniciando diagnósticos da API...")
-        logger.warning("API_BASE_URL configurada: %s", API_BASE_URL)
         
-        # Testar /health
-        try:
-            r = requests.get(f"{API_BASE_URL}/health", timeout=10)
-            logger.warning("API /health status: %d | body: %s", r.status_code, r.text.strip())
-            print(f"API /health status: {r.status_code} | body: {r.text.strip()}")
-        except Exception as e:
-            logger.warning("API /health falhou: %s", e, exc_info=True)
-            print(f"API /health falhou: {e}")
+        # Evita bombardear a API com diagnósticos se ela já estiver em cooldown recente (erro 429/timeout)
+        if _is_api_in_cooldown():
+            logger.warning("API está em cooldown recente. Pulando diagnósticos de rede para evitar sobrecarga.")
+            print("API está em cooldown recente. Pulando diagnósticos de rede para evitar sobrecarga.")
+        else:
+            logger.warning("Iniciando diagnósticos da API...")
+            logger.warning("API_BASE_URL configurada: %s", API_BASE_URL)
             
-        # Testar /patents
-        saved_patents = False
-        try:
-            r = requests.get(f"{API_BASE_URL}/patents", timeout=30)
-            logger.warning("API /patents status: %d | tamanho da resposta: %d bytes", r.status_code, len(r.content))
-            print(f"API /patents status: {r.status_code} | tamanho: {len(r.content)} bytes")
-            if r.status_code == 200:
-                data = r.json()
-                _write_cache(CACHE_PATENTS_PATH, data)
-                saved_patents = True
-                logger.warning("Cache de patentes salvo via diagnóstico.")
-        except Exception as e:
-            logger.warning("API /patents falhou: %s", e, exc_info=True)
-            print(f"API /patents falhou: {e}")
-            
-        # Testar /terms/associations
-        saved_terms = False
-        try:
-            r = requests.get(f"{API_BASE_URL}/terms/associations", timeout=20)
-            logger.warning("API /terms/associations status: %d | tamanho: %d bytes", r.status_code, len(r.content))
-            print(f"API /terms/associations status: {r.status_code} | tamanho: {len(r.content)} bytes")
-            if r.status_code == 200:
-                data = r.json()
-                _write_cache(CACHE_TERMS_PATH, data)
-                saved_terms = True
-                logger.warning("Cache de termos salvo via diagnóstico.")
-        except Exception as e:
-            logger.warning("API /terms/associations falhou: %s", e, exc_info=True)
-            print(f"API /terms/associations falhou: {e}")
+            # Testar /health
+            try:
+                r = requests.get(f"{API_BASE_URL}/health", timeout=10)
+                logger.warning("API /health status: %d | body: %s", r.status_code, r.text.strip())
+                print(f"API /health status: {r.status_code} | body: {r.text.strip()}")
+            except Exception as e:
+                logger.warning("API /health falhou: %s", e, exc_info=True)
+                print(f"API /health falhou: {e}")
+                
+            # Testar /patents
+            saved_patents = False
+            try:
+                r = requests.get(f"{API_BASE_URL}/patents", timeout=30)
+                logger.warning("API /patents status: %d | tamanho da resposta: %d bytes", r.status_code, len(r.content))
+                print(f"API /patents status: {r.status_code} | tamanho: {len(r.content)} bytes")
+                if r.status_code == 200:
+                    data = r.json()
+                    _write_cache(CACHE_PATENTS_PATH, data)
+                    saved_patents = True
+                    logger.warning("Cache de patentes salvo via diagnóstico.")
+            except Exception as e:
+                logger.warning("API /patents falhou: %s", e, exc_info=True)
+                print(f"API /patents falhou: {e}")
+                
+            # Testar /terms/associations
+            saved_terms = False
+            try:
+                r = requests.get(f"{API_BASE_URL}/terms/associations", timeout=20)
+                logger.warning("API /terms/associations status: %d | tamanho: %d bytes", r.status_code, len(r.content))
+                print(f"API /terms/associations status: {r.status_code} | tamanho: {len(r.content)} bytes")
+                if r.status_code == 200:
+                    data = r.json()
+                    _write_cache(CACHE_TERMS_PATH, data)
+                    saved_terms = True
+                    logger.warning("Cache de termos salvo via diagnóstico.")
+            except Exception as e:
+                logger.warning("API /terms/associations falhou: %s", e, exc_info=True)
+                print(f"API /terms/associations falhou: {e}")
 
-        # Se ambos os caches foram salvos com sucesso pelo diagnóstico, recarrega e limpa o cooldown
-        if saved_patents and saved_terms:
-            _clear_api_cooldown()
-            logger.warning("Sincronização via diagnóstico concluída com sucesso. Carregando dados do cache...")
-            print("Sincronização via diagnóstico concluída com sucesso. Carregando dados do cache...")
-            new_patents = load_patents()
-            new_terms = load_terms()
+            # Se ambos os caches foram salvos com sucesso pelo diagnóstico, recarrega e limpa o cooldown
+            if saved_patents and saved_terms:
+                _clear_api_cooldown()
+                logger.warning("Sincronização via diagnóstico concluída com sucesso. Carregando dados do cache...")
+                print("Sincronização via diagnóstico concluída com sucesso. Carregando dados do cache...")
+                new_patents = load_patents()
+                new_terms = load_terms()
 
     # Atualiza df_patents in-place para manter referências em outros arquivos
     df_patents.drop(df_patents.index, inplace=True)
