@@ -152,7 +152,7 @@ def api_waiting_layout(pathname):
             dbc.CardBody([
                 html.Div([
                     html.I(className="fas fa-server fa-spin me-3", style={"fontSize": "40px", "color": BLUE}),
-                    html.H2("Conectando ao Servidor de Dados", style={"margin": 0, "color": TEXT, "fontWeight": "600"})
+                    html.H2("Inicializando Servidor de Dados (Plano Gratuito)", style={"margin": 0, "color": TEXT, "fontWeight": "600"})
                 ], style={"display": "flex", "alignItems": "center", "marginBottom": "20px"}),
                 html.P(
                     "A API de patentes está sendo inicializada no Render. Como estamos utilizando o plano gratuito, "
@@ -160,7 +160,7 @@ def api_waiting_layout(pathname):
                     style={"color": MUTED, "fontSize": "16px", "lineHeight": "1.6"}
                 ),
                 html.P(
-                    "Assim que o servidor de dados terminar de inicializar, a plataforma carregará normalmente.",
+                    "Assim que o servidor acordar, a página tentará carregar automaticamente. Caso a tela continue em branco após alguns instantes, por favor, pressione F5 para atualizar os dados.",
                     style={"color": "#4b5563", "fontSize": "14px", "marginBottom": "24px"}
                 ),
                 dbc.Button([
