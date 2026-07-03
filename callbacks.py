@@ -160,7 +160,7 @@ def api_waiting_layout(pathname):
                     style={"color": MUTED, "fontSize": "16px", "lineHeight": "1.6"}
                 ),
                 html.P(
-                    "Assim que o servidor acordar, a página tentará carregar automaticamente. Caso a tela continue em branco após alguns instantes, por favor, pressione F5 para atualizar os dados.",
+                    "Por favor, aguarde alguns instantes e pressione F5 para carregar a plataforma. Se a página carregar incompleta (apenas com o fundo e a barra lateral em branco), basta atualizar o navegador (F5) mais uma vez para sincronizar os dados.",
                     style={"color": "#4b5563", "fontSize": "14px", "marginBottom": "24px"}
                 ),
                 dbc.Button([
