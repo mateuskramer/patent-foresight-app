@@ -158,13 +158,26 @@ def api_waiting_layout(pathname):
                     style={"color": MUTED, "fontSize": "16px", "lineHeight": "1.6"}
                 ),
                 html.P(
-                    "Por favor, aguarde alguns instantes e pressione F5 para carregar a plataforma. Se a página carregar incompleta (apenas com o fundo e a barra lateral em branco), basta atualizar o navegador (F5) mais uma vez para sincronizar os dados.",
-                    style={"color": "#4b5563", "fontSize": "14px", "marginBottom": "24px"}
+                    "Por favor, aguarde alguns instantes e atualize a página para carregar a plataforma. Se a página carregar "
+                    "incompleta (apenas com o fundo e a barra lateral em branco), basta atualizar o navegador mais uma vez.",
+                    style={"color": "#4b5563", "fontSize": "14px", "lineHeight": "1.6", "marginBottom": "20px"}
                 ),
-                dbc.Button([
-                    html.I(className="fas fa-sync-alt me-2"), "Verificar Conexão e Recarregar"
-                ], href=pathname, external_link=True, color="primary", size="lg",
-                   style={"borderRadius": "12px", "fontWeight": "600", "padding": "12px 24px", "background": BLUE, "border": "none"})
+                html.P(
+                    "Caso utilize um bloqueador de anúncios ou extensão de privacidade, o navegador pode impedir que a API "
+                    "seja iniciada automaticamente. Se o carregamento persistir, clique em 'Iniciar API' para ativá-la manualmente "
+                    "e depois atualize a página.",
+                    style={"color": "#6b7280", "fontSize": "13px", "lineHeight": "1.5", "marginBottom": "24px"}
+                ),
+                html.Div([
+                    dbc.Button([
+                        html.I(className="fas fa-sync-alt me-2"), "Atualizar Página"
+                    ], href=pathname, external_link=True, color="primary", size="lg",
+                       style={"borderRadius": "12px", "fontWeight": "600", "padding": "12px 24px", "background": BLUE, "border": "none"}),
+                    dbc.Button([
+                        html.I(className="fas fa-bolt me-2"), "Iniciar API"
+                    ], href=f"{API_BASE_URL}/health", target="_blank", external_link=True, color="warning", size="lg",
+                       style={"borderRadius": "12px", "fontWeight": "600", "padding": "12px 24px"})
+                ], style={"display": "flex", "flexWrap": "wrap", "gap": "12px"})
             ]),
             style={
                 "background": CARD,
