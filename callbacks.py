@@ -191,6 +191,15 @@ def register_callbacks(app, page_routes):
             if (!trigger_id) {{
                 return "";
             }}
+            
+            // Trava de Segurança: Se a URL já tem o parâmetro, significa que o reload forçado falhou.
+            // Paramos para evitar loop infinito de recargas se o backend falhar.
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get("force_refresh") === "true") {{
+                console.warn("[WAKE-UP] O reload forçado já foi tentado e falhou. Parando polling para evitar loop.");
+                return "Erro no carregamento do Servidor";
+            }}
+            
             console.log("[WAKE-UP] Gatilho de wake-up montado no DOM. Iniciando polling...");
             
             async function wake() {{
@@ -199,7 +208,7 @@ def register_callbacks(app, page_routes):
                         console.log("[WAKE-UP] Verificando se a API acordou...");
                         const r = await fetch("{API_BASE_URL}/health");
                         if (r.ok) {{
-                            console.log("[WAKE-UP] API respondeu 200 OK! Recarregando página...");
+                            console.log("[WAKE-UP] API respondeu 200 OK! Recarregando com force_refresh...");
                             break;
                         }}
                         console.warn("[WAKE-UP] API retornou status: " + r.status + ". Aguardando 2s...");
@@ -208,7 +217,11 @@ def register_callbacks(app, page_routes):
                     }}
                     await new Promise(r => setTimeout(r, 2000));
                 }}
-                window.location.reload();
+                
+                // Navega para a URL com o parâmetro de recarga forçada usando URLSearchParams
+                const url = new URL(window.location.href);
+                url.searchParams.set("force_refresh", "true");
+                window.location.href = url.pathname + url.search;
             }}
             
             wake();
@@ -217,6 +230,26 @@ def register_callbacks(app, page_routes):
         """,
         Output("wake-up-status-div", "children"),
         Input("wake-up-trigger", "id"),
+        prevent_initial_call=True
+    )
+
+    # Remove o parâmetro force_refresh da URL do navegador após o carregamento bem-sucedido
+    app.clientside_callback(
+        """
+        function(children) {
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get("force_refresh") === "true") {
+                urlParams.delete("force_refresh");
+                const newSearch = urlParams.toString();
+                const newUrl = window.location.pathname + (newSearch ? "?" + newSearch : "");
+                window.history.replaceState({}, document.title, newUrl);
+                console.log("[WAKE-UP] Parâmetro force_refresh removido da URL.");
+            }
+            return window.dash_clientside.no_update;
+        }
+        """,
+        Output("wake-up-status-div", "className"),
+        Input("page-content", "children"),
         prevent_initial_call=True
     )
 
@@ -229,12 +262,20 @@ def register_callbacks(app, page_routes):
         global _LAST_REFRESH_ATTEMPT
         try:
             import data
-            # Se os dados estão vazios (por exemplo, devido ao cold start da API no Render), tenta recarregar com cooldown
+            
+            # Parse robusto e correto do parâmetro force_refresh
+            force_refresh = False
+            if search:
+                import urllib.parse
+                query_params = urllib.parse.parse_qs(search.lstrip('?'))
+                force_refresh = query_params.get('force_refresh', [None])[0] == 'true'
+
+            # Se os dados estão vazios (por exemplo, devido ao cold start da API no Render), tenta recarregar com cooldown (bypassado se force_refresh=True)
             if data.df_patents.empty or data.terms_df.empty:
                 now = time.time()
-                if now - _LAST_REFRESH_ATTEMPT > REFRESH_COOLDOWN:
+                if force_refresh or (now - _LAST_REFRESH_ATTEMPT > REFRESH_COOLDOWN):
                     _LAST_REFRESH_ATTEMPT = now
-                    logger.warning("Dados vazios na renderização da página %s. Tentando recarregar da API...", pathname)
+                    logger.warning("Dados vazios na renderização da página %s (force_refresh=%s). Tentando recarregar da API...", pathname, force_refresh)
                     try:
                         data.refresh_data()
                     except Exception as ex:
