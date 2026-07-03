@@ -27,7 +27,13 @@ from data import (
 
 def get_predictions_df(term: str) -> pd.DataFrame:
     try:
-        r = requests.get(f"{API_BASE_URL}/predictions/{term}", timeout=10)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+        }
+        if API_KEY:
+            headers["X-API-Key"] = API_KEY
+        r = requests.get(f"{API_BASE_URL}/predictions/{term}", headers=headers, timeout=10)
         if r.status_code == 404:
             return pd.DataFrame()
         r.raise_for_status()
@@ -39,7 +45,12 @@ def get_predictions_df(term: str) -> pd.DataFrame:
 
 def get_dictionary_df() -> pd.DataFrame:
     try:
-        headers = {"X-API-Key": API_KEY}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+        }
+        if API_KEY:
+            headers["X-API-Key"] = API_KEY
         r = requests.get(f"{API_BASE_URL}/dictionary", headers=headers, timeout=10)
         r.raise_for_status()
         data = r.json()
@@ -50,7 +61,12 @@ def get_dictionary_df() -> pd.DataFrame:
 
 def add_dictionary_term(term: str) -> bool:
     try:
-        headers = {"X-API-Key": API_KEY}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+        }
+        if API_KEY:
+            headers["X-API-Key"] = API_KEY
         r = requests.post(f"{API_BASE_URL}/dictionary", json={"term": term}, headers=headers, timeout=10)
         r.raise_for_status()
         res = r.json()
@@ -61,7 +77,12 @@ def add_dictionary_term(term: str) -> bool:
 
 def delete_dictionary_term(term_id: int) -> bool:
     try:
-        headers = {"X-API-Key": API_KEY}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+        }
+        if API_KEY:
+            headers["X-API-Key"] = API_KEY
         r = requests.delete(f"{API_BASE_URL}/dictionary/{term_id}", headers=headers, timeout=10)
         r.raise_for_status()
         res = r.json()

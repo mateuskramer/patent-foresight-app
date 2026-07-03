@@ -129,15 +129,27 @@ def _write_cache(path, data):
     except Exception as e:
         logger.warning("Erro ao salvar cache em %s: %s", path, e)
 
-def requests_get_with_retry(url, timeout=30, max_retries=3, delay=3):
+def requests_get_with_retry(url, timeout=30, max_retries=3, delay=3, headers=None):
     import random
     # Adiciona pequeno jitter inicial para evitar que múltiplos workers batam no exato mesmo milissegundo
     time.sleep(random.uniform(0.1, 0.5))
     
+    # Cabeçalhos padrão que imitam um navegador real para evitar bloqueios do Cloudflare/Render no cold start
+    default_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    }
+    if API_KEY:
+        default_headers["X-API-Key"] = API_KEY
+        
+    if headers:
+        default_headers.update(headers)
+    
     for attempt in range(max_retries):
         try:
             logger.info("Requisitando API (tentativa %d/%d): %s", attempt + 1, max_retries, url)
-            r = requests.get(url, timeout=timeout)
+            r = requests.get(url, headers=default_headers, timeout=timeout)
             
             # Se for 429, trata com recuo (backoff) explícito
             if r.status_code == 429:
@@ -213,7 +225,13 @@ def load_patents():
                     # Envia um ping leve de wake-up para o /health antes de puxar dados pesados (timeout longo 60s)
                     try:
                         logger.info("Enviando ping de wake-up para o endpoint /health da API...")
-                        r_health = requests.get(f"{API_BASE_URL}/health", timeout=60)
+                        headers = {
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            "Accept": "application/json, text/plain, */*",
+                        }
+                        if API_KEY:
+                            headers["X-API-Key"] = API_KEY
+                        r_health = requests.get(f"{API_BASE_URL}/health", headers=headers, timeout=60)
                         if r_health.status_code == 429:
                             logger.warning("API /health retornou 429 (já acordada). Prosseguindo...")
                         else:
