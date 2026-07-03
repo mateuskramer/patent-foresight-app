@@ -151,11 +151,14 @@ def requests_get_with_retry(url, timeout=30, max_retries=3, delay=3, headers=Non
             logger.info("Requisitando API (tentativa %d/%d): %s", attempt + 1, max_retries, url)
             r = requests.get(url, headers=default_headers, timeout=timeout)
             
-            # Se for 429, trata com recuo (backoff) explícito
+            # Se for 429, trata com recuo (backoff) explícito e log detalhado
             if r.status_code == 429:
+                logger.warning("API retornou 429 (Too Many Requests).")
+                logger.warning("Headers da resposta 429: %s", dict(r.headers))
+                logger.warning("Corpo da resposta 429: %s", r.text[:500])
                 retry_after = r.headers.get("Retry-After")
                 wait_time = int(retry_after) if (retry_after and retry_after.isdigit()) else (delay * (attempt + 1) * 2)
-                logger.warning("API retornou 429 (Too Many Requests). Aguardando %ds antes de tentar novamente...", wait_time)
+                logger.warning("Aguardando %ds antes de tentar novamente...", wait_time)
                 time.sleep(wait_time)
                 continue
                 
@@ -163,9 +166,13 @@ def requests_get_with_retry(url, timeout=30, max_retries=3, delay=3, headers=Non
             return r
         except requests.exceptions.HTTPError as http_err:
             if http_err.response is not None and http_err.response.status_code == 429:
-                retry_after = http_err.response.headers.get("Retry-After")
+                r_err = http_err.response
+                logger.warning("API retornou HTTP 429 (HTTPError).")
+                logger.warning("Headers da resposta 429 (HTTPError): %s", dict(r_err.headers))
+                logger.warning("Corpo da resposta 429 (HTTPError): %s", r_err.text[:500])
+                retry_after = r_err.headers.get("Retry-After")
                 wait_time = int(retry_after) if (retry_after and retry_after.isdigit()) else (delay * (attempt + 1) * 2)
-                logger.warning("API retornou 429. Aguardando %ds...", wait_time)
+                logger.warning("Aguardando %ds...", wait_time)
                 time.sleep(wait_time)
                 continue
             
@@ -233,12 +240,17 @@ def load_patents():
                             headers["X-API-Key"] = API_KEY
                         r_health = requests.get(f"{API_BASE_URL}/health", headers=headers, timeout=60)
                         if r_health.status_code == 429:
-                            logger.warning("API /health retornou 429 (já acordada). Prosseguindo...")
+                            logger.error("API /health retornou 429 (Bloqueado/Rate Limit) no wake-up ping!")
+                            logger.error("Headers da resposta 429 /health: %s", dict(r_health.headers))
+                            logger.error("Corpo da resposta 429 /health: %s", r_health.text[:500])
+                            # Aborta a tentativa de rede para evitar spam de chamadas subsequentes e ativa cooldown
+                            raise Exception("API bloqueada por rate limit (429) no ping de wake-up.")
                         else:
                             r_health.raise_for_status()
                             logger.info("API acordada com sucesso (resposta /health: %s).", r_health.text.strip())
                     except Exception as wake_err:
-                        logger.warning("Falha ou timeout no ping de wake-up da API: %s. Continuando...", wake_err)
+                        logger.warning("Falha ou timeout no ping de wake-up da API: %s. Abortando tentativa de puxar dados pesados.", wake_err)
+                        raise wake_err
 
                     try:
                         r = requests_get_with_retry(f"{API_BASE_URL}/patents", timeout=30)
