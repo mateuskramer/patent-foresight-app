@@ -462,6 +462,7 @@ app.layout = html.Div(
         content,
         theme_btn,
         dcc.Interval(id="process-log-interval", interval=3000, n_intervals=0),
+        html.Div(id="wake-up-status-div", style={"display": "none"}),
     ],
     className="theme-dark",
 )

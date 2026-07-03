@@ -683,20 +683,6 @@ def refresh_data():
 
     logger.info("Carregando dados...")
 
-    # EXPERIMENTO DEFINITIVO: Testar CURL interno para verificar bloqueio de rede serviço-a-serviço no Render
-    try:
-        import subprocess
-        logger.info("=== DIAGNÓSTICO: Executando CURL interno para %s/health ===", API_BASE_URL)
-        res = subprocess.run(
-            ["curl", "-s", "-i", f"{API_BASE_URL}/health"],
-            capture_output=True, text=True, timeout=15
-        )
-        logger.info("CURL OUT:\n%s", res.stdout if res.stdout else "(sem output)")
-        if res.stderr:
-            logger.info("CURL ERR:\n%s", res.stderr)
-    except Exception as curl_err:
-        logger.warning("Falha ao rodar CURL interno: %s", curl_err)
-
     new_patents = load_patents()
     
     # Intervalo de 1.5s entre chamadas sequenciais pesadas para respeitar o rate-limiter da API

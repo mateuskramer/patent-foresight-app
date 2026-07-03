@@ -147,6 +147,7 @@ REFRESH_COOLDOWN = 30  # segundos
 
 def api_waiting_layout(pathname):
     return html.Div([
+        html.Div(id="wake-up-trigger", style={"display": "none"}),  # Gatilho para o clientside callback
         dbc.Card(
             dbc.CardBody([
                 html.Div([
@@ -180,6 +181,41 @@ def api_waiting_layout(pathname):
     ], style={"padding": "20px"})
 
 def register_callbacks(app, page_routes):
+
+    # =========================================================================
+    # WAKE-UP AUTOMÁTICO VIA CLIENTE (NAVEGADOR DO USUÁRIO)
+    # =========================================================================
+    app.clientside_callback(
+        f"""
+        function(trigger_id) {{
+            if (!trigger_id) {{
+                return "";
+            }}
+            console.log("[WAKE-UP] Gatilho de wake-up montado no DOM. Iniciando requisição externa...");
+            
+            // Faz um GET na API direto do IP do cliente (navegador), contornando o bloqueio interno do Render
+            fetch("{API_BASE_URL}/health")
+                .then(function(response) {{
+                    console.log("[WAKE-UP] API acordou! Status:", response.status);
+                    // Aguarda 1.5s e recarrega a página para puxar os dados
+                    setTimeout(function() {{
+                        window.location.reload();
+                    }}, 1500);
+                }})
+                .catch(function(error) {{
+                    console.error("[WAKE-UP] Erro ao acordar a API:", error);
+                    // Recarrega após 10s caso ocorra uma falha temporária de rede do cliente
+                    setTimeout(function() {{
+                        window.location.reload();
+                    }}, 10000);
+                }});
+            return "Iniciado";
+        }}
+        """,
+        Output("wake-up-status-div", "children"),
+        Input("wake-up-trigger", "id"),
+        prevent_initial_call=True
+    )
 
     # =========================================================================
     # NAVEGAÇÃO
