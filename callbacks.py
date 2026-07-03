@@ -196,14 +196,23 @@ def register_callbacks(app, page_routes):
             // Faz um GET na API direto do IP do cliente (navegador), contornando o bloqueio interno do Render
             fetch("{API_BASE_URL}/health")
                 .then(function(response) {{
-                    console.log("[WAKE-UP] API acordou! Status:", response.status);
-                    // Aguarda 1.5s e recarrega a página para puxar os dados
-                    setTimeout(function() {{
-                        window.location.reload();
-                    }}, 1500);
+                    if (response.ok) {{
+                        console.log("[WAKE-UP] API acordou com sucesso! Recarregando...");
+                        // Aguarda 1.5s e recarrega a página para puxar os dados
+                        setTimeout(function() {{
+                            window.location.reload();
+                        }}, 1500);
+                    }} else {{
+                        console.warn("[WAKE-UP] API retornou erro ou rate limit. Status:", response.status);
+                        console.warn("[WAKE-UP] Aguardando 10 segundos antes de tentar recarregar...");
+                        // Evita loop infinito rápido em caso de 429, aguarda 10s para tentar de novo
+                        setTimeout(function() {{
+                            window.location.reload();
+                        }}, 10000);
+                    }}
                 }})
                 .catch(function(error) {{
-                    console.error("[WAKE-UP] Erro ao acordar a API:", error);
+                    console.error("[WAKE-UP] Falha de conexão ao acordar a API:", error);
                     // Recarrega após 10s caso ocorra uma falha temporária de rede do cliente
                     setTimeout(function() {{
                         window.location.reload();

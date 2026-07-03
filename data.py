@@ -70,7 +70,7 @@ CACHE_TTL = 86400  # 24 horas (dados estáveis de patentes)
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 COOLDOWN_PATH = os.path.join(CACHE_DIR, "cooldown.txt")
-COOLDOWN_TIME = 60  # 1 minuto de cooldown em caso de falha da API
+COOLDOWN_TIME = 900  # 15 minutos de cooldown em caso de falha da API para respeitar rate limits do Render
 
 def _is_api_in_cooldown():
     try:
