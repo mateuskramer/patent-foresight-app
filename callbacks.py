@@ -191,33 +191,27 @@ def register_callbacks(app, page_routes):
             if (!trigger_id) {{
                 return "";
             }}
-            console.log("[WAKE-UP] Gatilho de wake-up montado no DOM. Iniciando requisição externa...");
+            console.log("[WAKE-UP] Gatilho de wake-up montado no DOM. Iniciando polling...");
             
-            // Faz um GET na API direto do IP do cliente (navegador), contornando o bloqueio interno do Render
-            fetch("{API_BASE_URL}/health")
-                .then(function(response) {{
-                    if (response.ok) {{
-                        console.log("[WAKE-UP] API acordou com sucesso! Recarregando...");
-                        // Aguarda 1.5s e recarrega a página para puxar os dados
-                        setTimeout(function() {{
-                            window.location.reload();
-                        }}, 1500);
-                    }} else {{
-                        console.warn("[WAKE-UP] API retornou erro ou rate limit. Status:", response.status);
-                        console.warn("[WAKE-UP] Aguardando 10 segundos antes de tentar recarregar...");
-                        // Evita loop infinito rápido em caso de 429, aguarda 10s para tentar de novo
-                        setTimeout(function() {{
-                            window.location.reload();
-                        }}, 10000);
+            async function wake() {{
+                while (true) {{
+                    try {{
+                        console.log("[WAKE-UP] Verificando se a API acordou...");
+                        const r = await fetch("{API_BASE_URL}/health");
+                        if (r.ok) {{
+                            console.log("[WAKE-UP] API respondeu 200 OK! Recarregando página...");
+                            break;
+                        }}
+                        console.warn("[WAKE-UP] API retornou status: " + r.status + ". Aguardando 2s...");
+                    }} catch (e) {{
+                        console.warn("[WAKE-UP] Falha de conexão/CORS. Aguardando 2s...");
                     }}
-                }})
-                .catch(function(error) {{
-                    console.error("[WAKE-UP] Falha de conexão ao acordar a API:", error);
-                    // Recarrega após 10s caso ocorra uma falha temporária de rede do cliente
-                    setTimeout(function() {{
-                        window.location.reload();
-                    }}, 10000);
-                }});
+                    await new Promise(r => setTimeout(r, 2000));
+                }}
+                window.location.reload();
+            }}
+            
+            wake();
             return "Iniciado";
         }}
         """,
