@@ -129,7 +129,7 @@ def _write_cache(path, data):
     except Exception as e:
         logger.warning("Erro ao salvar cache em %s: %s", path, e)
 
-def requests_get_with_retry(url, timeout=30, max_retries=3, delay=3, headers=None):
+def requests_get_with_retry(url, timeout=30, max_retries=2, delay=2, headers=None):
     import random
     # Adiciona pequeno jitter inicial para evitar que múltiplos workers batam no exato mesmo milissegundo
     time.sleep(random.uniform(0.1, 0.5))
@@ -151,11 +151,9 @@ def requests_get_with_retry(url, timeout=30, max_retries=3, delay=3, headers=Non
             logger.info("Requisitando API (tentativa %d/%d): %s", attempt + 1, max_retries, url)
             r = requests.get(url, headers=default_headers, timeout=timeout)
             
-            # Se for 429, trata com recuo (backoff) explícito e log detalhado
+            # Se for 429, trata com recuo (backoff) explícito
             if r.status_code == 429:
                 logger.warning("API retornou 429 (Too Many Requests).")
-                logger.warning("Headers da resposta 429: %s", dict(r.headers))
-                logger.warning("Corpo da resposta 429: %s", r.text[:500])
                 retry_after = r.headers.get("Retry-After")
                 wait_time = int(retry_after) if (retry_after and retry_after.isdigit()) else (delay * (attempt + 1) * 2)
                 logger.warning("Aguardando %ds antes de tentar novamente...", wait_time)
@@ -168,8 +166,6 @@ def requests_get_with_retry(url, timeout=30, max_retries=3, delay=3, headers=Non
             if http_err.response is not None and http_err.response.status_code == 429:
                 r_err = http_err.response
                 logger.warning("API retornou HTTP 429 (HTTPError).")
-                logger.warning("Headers da resposta 429 (HTTPError): %s", dict(r_err.headers))
-                logger.warning("Corpo da resposta 429 (HTTPError): %s", r_err.text[:500])
                 retry_after = r_err.headers.get("Retry-After")
                 wait_time = int(retry_after) if (retry_after and retry_after.isdigit()) else (delay * (attempt + 1) * 2)
                 logger.warning("Aguardando %ds...", wait_time)
@@ -229,7 +225,7 @@ def load_patents():
                     fallback = _read_cache_fallback(CACHE_PATENTS_PATH)
                     df = pd.DataFrame(fallback) if fallback else pd.DataFrame()
                 else:
-                    # Envia um ping leve de wake-up para o /health antes de puxar dados pesados (timeout longo 60s)
+                    # Envia um ping leve de wake-up para o /health antes de puxar dados pesados (timeout 10s)
                     try:
                         logger.info("Enviando ping de wake-up para o endpoint /health da API...")
                         headers = {
@@ -238,11 +234,9 @@ def load_patents():
                         }
                         if API_KEY:
                             headers["X-API-Key"] = API_KEY
-                        r_health = requests.get(f"{API_BASE_URL}/health", headers=headers, timeout=60)
+                        r_health = requests.get(f"{API_BASE_URL}/health", headers=headers, timeout=10)
                         if r_health.status_code == 429:
                             logger.error("API /health retornou 429 (Bloqueado/Rate Limit) no wake-up ping!")
-                            logger.error("Headers da resposta 429 /health: %s", dict(r_health.headers))
-                            logger.error("Corpo da resposta 429 /health: %s", r_health.text[:500])
                             # Aborta a tentativa de rede para evitar spam de chamadas subsequentes e ativa cooldown
                             raise Exception("API bloqueada por rate limit (429) no ping de wake-up.")
                         else:
@@ -689,67 +683,6 @@ def refresh_data():
     time.sleep(1.5)
     
     new_terms   = load_terms()
-
-    # Se estiver vazio, roda o diagnóstico e tenta carregar do cache recém-criado
-    if new_patents.empty or new_terms.empty:
-        logger.warning("DADOS VAZIOS OU PARCIAIS DETECTADOS NO STARTUP!")
-        print("=== DADOS VAZIOS OU PARCIAIS DETECTADOS NO STARTUP! ===")
-        print(f"API_BASE_URL configurada: {API_BASE_URL}")
-        
-        # Evita bombardear a API com diagnósticos se ela já estiver em cooldown recente (erro 429/timeout)
-        if _is_api_in_cooldown():
-            logger.warning("API está em cooldown recente. Pulando diagnósticos de rede para evitar sobrecarga.")
-            print("API está em cooldown recente. Pulando diagnósticos de rede para evitar sobrecarga.")
-        else:
-            logger.warning("Iniciando diagnósticos da API...")
-            logger.warning("API_BASE_URL configurada: %s", API_BASE_URL)
-            
-            # Testar /health
-            try:
-                r = requests.get(f"{API_BASE_URL}/health", timeout=10)
-                logger.warning("API /health status: %d | body: %s", r.status_code, r.text.strip())
-                print(f"API /health status: {r.status_code} | body: {r.text.strip()}")
-            except Exception as e:
-                logger.warning("API /health falhou: %s", e, exc_info=True)
-                print(f"API /health falhou: {e}")
-                
-            # Testar /patents
-            saved_patents = False
-            try:
-                r = requests.get(f"{API_BASE_URL}/patents", timeout=30)
-                logger.warning("API /patents status: %d | tamanho da resposta: %d bytes", r.status_code, len(r.content))
-                print(f"API /patents status: {r.status_code} | tamanho: {len(r.content)} bytes")
-                if r.status_code == 200:
-                    data = r.json()
-                    _write_cache(CACHE_PATENTS_PATH, data)
-                    saved_patents = True
-                    logger.warning("Cache de patentes salvo via diagnóstico.")
-            except Exception as e:
-                logger.warning("API /patents falhou: %s", e, exc_info=True)
-                print(f"API /patents falhou: {e}")
-                
-            # Testar /terms/associations
-            saved_terms = False
-            try:
-                r = requests.get(f"{API_BASE_URL}/terms/associations", timeout=20)
-                logger.warning("API /terms/associations status: %d | tamanho: %d bytes", r.status_code, len(r.content))
-                print(f"API /terms/associations status: {r.status_code} | tamanho: {len(r.content)} bytes")
-                if r.status_code == 200:
-                    data = r.json()
-                    _write_cache(CACHE_TERMS_PATH, data)
-                    saved_terms = True
-                    logger.warning("Cache de termos salvo via diagnóstico.")
-            except Exception as e:
-                logger.warning("API /terms/associations falhou: %s", e, exc_info=True)
-                print(f"API /terms/associations falhou: {e}")
-
-            # Se ambos os caches foram salvos com sucesso pelo diagnóstico, recarrega e limpa o cooldown
-            if saved_patents and saved_terms:
-                _clear_api_cooldown()
-                logger.warning("Sincronização via diagnóstico concluída com sucesso. Carregando dados do cache...")
-                print("Sincronização via diagnóstico concluída com sucesso. Carregando dados do cache...")
-                new_patents = load_patents()
-                new_terms = load_terms()
 
     # Atualiza df_patents in-place para manter referências em outros arquivos
     df_patents.drop(df_patents.index, inplace=True)
