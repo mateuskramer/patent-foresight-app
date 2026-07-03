@@ -824,4 +824,7 @@ def refresh_data():
         print("=== DADOS VAZIOS OU PARCIAIS DETECTADOS NO STARTUP! ===")
         print(f"API_BASE_URL configurada: {API_BASE_URL}")
 
-refresh_data()
+# Executa o carregamento inicial em segundo plano (background thread)
+# para evitar travar a inicialização do Gunicorn/Render no deploy (Port scan timeout)
+import threading
+threading.Thread(target=refresh_data, daemon=True).start()
